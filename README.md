@@ -64,6 +64,19 @@ python Evaluate_Llama3.py
 python infer.py --l_idx <left_index> --r_idx <right_index> --city <city_abbreviation>
 ```
 
+
+### 📊 Unified next location evaluation (Acc@K / MRR / nDCG)
+For single-step next-location prediction at \(t+1\), use the unified ranking evaluator:
+```
+python evaluate_nextloc.py --city c --split test --k 10 --ckpt tangera/Llama3-8B-Mob --out results/nextloc_c.json
+```
+This reports `Acc@1`, `Acc@5`, `Acc@10`, `MRR`, and `nDCG@10`, and saves per-sample debug records (prompt, raw output, parsed predictions, ground truth) to `results/nextloc_debug.json` by default.
+
+To export dataset labels for the same task from raw csv input, enable `--task nextloc` in dataset conversion:
+```
+python tools/Data_tools/make_dataset.py --task nextloc --output_filepath datasets/dataset_demo_nextloc.json
+```
+
 ### 🪨 Baseline
 LP-Bert is the champion of HuMob'23. 
 The reproduction code of [LP-Bert](https://dl.acm.org/doi/10.1145/3615894.3628498) by [RobinsonXING](https://github.com/RobinsonXing) can be found [here](https://github.com/RobinsonXing/hmpc2024/tree/post_embed).

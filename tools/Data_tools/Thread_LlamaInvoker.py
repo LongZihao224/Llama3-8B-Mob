@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
+
 def load_data_for_gpt_prediction(filepath, uid):
     # 加载数据
     df = pd.read_csv(filepath, compression='gzip')
@@ -13,6 +14,7 @@ def load_data_for_gpt_prediction(filepath, uid):
     df = df.astype(int)
 
     return df
+
 
 def get_datasets_for_gpt(df, train_days, test_days, predict_steps):
     train_df = df[df['d'].isin(range(train_days[0], train_days[1] + 1))]
@@ -32,6 +34,7 @@ def get_datasets_for_gpt(df, train_days, test_days, predict_steps):
 
     return (train, test), test_o
 
+
 def df_to_sequence_string(df):
     df = df.drop(columns=['uid'], errors='ignore')
 
@@ -39,7 +42,7 @@ def df_to_sequence_string(df):
     def to_int(x):
         try:
             return int(x)
-        except:
+        except Exception:
             return x
 
     # Convert the DataFrame header to a string
@@ -51,6 +54,7 @@ def df_to_sequence_string(df):
     # Join the list of strings with a newline character, starting with the header
     return header_string + '\n' + '\n'.join(predictions)
 
+
 def organise_input(data):
     sequence, test = data
     combined_df = pd.concat([sequence, test])
@@ -58,7 +62,15 @@ def organise_input(data):
     input_str = df_to_sequence_string(combined_df)
     return input_str
 
-def convert_to_dialog_format(input_data):
+
+def _to_location_id(record, grid_size=200):
+    if isinstance(record, (list, tuple)) and len(record) >= 4:
+        x, y = int(record[-2]), int(record[-1])
+        return x * grid_size + y
+    raise ValueError(f"Unexpected record format for location conversion: {record}")
+
+
+def convert_to_dialog_format(input_data, task="trajectory"):
     """
     将存储的 input_str 和 test_o 数据转换为对话格式的 JSON 数据。
 
@@ -77,16 +89,24 @@ def convert_to_dialog_format(input_data):
     for item in input_data:
         input_str = item["input_str"]
         test_o = item["test_o"]
-        
+
         uid = list(test_o['uid'].values())[0]
         # 移除 uid 列
         df = pd.DataFrame(test_o).drop(columns=['uid'], errors='ignore')
-        
+
         # 构建 assistant 的内容
-        assistant_content = {
-            "reason": "The individual's trajectory shows a consistent pattern, likely to follow the established pattern.",
-            "prediction": df.values.tolist()
-        }
+        if task == "nextloc":
+            next_record = df.values.tolist()[0]
+            assistant_content = {
+                "reason": "Predicting only the immediate next location after the observed history.",
+                "next_location_id": _to_location_id(next_record),
+                "next_record": next_record,
+            }
+        else:
+            assistant_content = {
+                "reason": "The individual's trajectory shows a consistent pattern, likely to follow the established pattern.",
+                "prediction": df.values.tolist()
+            }
 
         # 创建对话格式的数据
         dialog = {
@@ -99,6 +119,7 @@ def convert_to_dialog_format(input_data):
         }
         dialogs.append(dialog)
     return dialogs
+
 
 class LlamaInvoker:
 
@@ -115,9 +136,10 @@ class LlamaInvoker:
         self.train_days = data_config["train_days"]
         self.test_days = data_config["test_days"]
         self.steps = data_config["steps"]
+        self.task = data_config.get("task", "trajectory")
 
         print("==================================" + " Llama Initialization " + "==================================")
-        
+
     def process_uid(self, i, input_filepath, min_uid, steps, train_days, test_days):
         output_filepath = f'outputs/Llama_prediction_HumanMobility/{min_uid}/Predictions_uid{i}_{steps}step.csv'
         df = load_data_for_gpt_prediction(input_filepath, i)
@@ -129,16 +151,17 @@ class LlamaInvoker:
         input_str = organise_input(data)
         print(i)
         return {"input_str": input_str, "test_o": test_o.to_dict()}
-    
+
     def run(self):
         data_to_save = []
-            
+        steps = 1 if self.task == "nextloc" else self.steps
+
         # can't wait -> use multi-thread
         # 使用 ThreadPoolExecutor 创建一个线程池，最大线程数为 5
         with ThreadPoolExecutor(max_workers=5) as executor:
             # 提交所有 UID 的处理任务
             future_to_uid = {
-                executor.submit(self.process_uid, i, self.input_filepath, self.min_uid, self.steps, self.train_days, self.test_days): i
+                executor.submit(self.process_uid, i, self.input_filepath, self.min_uid, steps, self.train_days, self.test_days): i
                 for i in range(self.min_uid, self.max_uid)
             }
 
@@ -152,7 +175,7 @@ class LlamaInvoker:
                 except Exception as e:
                     print(f"Processing failed for UID {i}: {e}")
 
-        dialog_data = convert_to_dialog_format(data_to_save)
+        dialog_data = convert_to_dialog_format(data_to_save, task=self.task)
         # 将结果保存到 JSON 文件
         with open(self.output_filepath, 'w', encoding='utf-8') as f:
             json.dump(dialog_data, f, ensure_ascii=False, indent=4)
